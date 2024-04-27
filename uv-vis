@@ -96,6 +96,8 @@ class CameraControlApp(QWidget):
         exposureTime = int(self.exposureTimeInput.text())
         if selectedCamera != "Virtual Camera":
             self.camera.ExposureTimeAbs.SetValue(exposureTime)
+            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            self.timer.start(100)  # Start updating the display every 100 ms
         print(f"Camera initialized with exposure time: {exposureTime}us")
         self.updateDirectoryDisplay(f"Camera initialized with exposure time: {exposureTime}us")
 
@@ -111,25 +113,33 @@ class CameraControlApp(QWidget):
             os.makedirs(save_directory)
 
         # Capture and save the image
-        self.camera.StartGrabbingMax(1)
-        grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-        if grabResult.GrabSucceeded():
-            img = grabResult.Array
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"{imageType}_{timestamp}.png"
-            cv2.imwrite(os.path.join(save_directory, filename), img)
-            imagePath = os.path.join(save_directory, filename)
-            self.updateImageDisplay(imagePath)
-            self.directoryDisplayLabel.setText(f"Last saved in: {os.path.abspath(save_directory)}")
-            print(f"Image saved in {imagePath}")
-            self.updateDirectoryDisplay(f"Image saved in {imagePath}，image maxpixe is {img.max()}")
-        grabResult.Release()
+        self.timer.stop()  # Stop the real-time updates
+        if self.camera.IsGrabbing():
+            grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+            if grabResult.GrabSucceeded():
+                # Save the image
+                img = grabResult.Array
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                filename = f"captured_{timestamp}.png"
+                cv2.imwrite(os.path.join("save_directory", filename), img)  # Specify your save directory
+                self.directoryDisplayLabel.setText(f"Image saved in: {os.path.abspath('save_directory')}/{filename}")
+                # Update the display with the last captured image
+                qimage = QImage(img.data, img.shape[1], img.shape[0], QImage.Format_Indexed8)
+                pixmap = QPixmap.fromImage(qimage)
+                self.imageDisplayLabel.setPixmap(pixmap.scaled(self.imageDisplayLabel.size(), Qt.KeepAspectRatio))
+            grabResult.Release()
+
 
     def updateImageDisplay(self, imagePath):
-        pixmap = QPixmap(imagePath)
-        self.imageDisplayLabel.setPixmap(
-            pixmap.scaled(self.imageDisplayLabel.width(), self.imageDisplayLabel.height(), Qt.KeepAspectRatio))
-
+        if self.camera.IsGrabbing():
+            grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+            if grabResult.GrabSucceeded():
+                # Access the image data and convert it to a format suitable for display
+                img = grabResult.Array
+                qimage = QImage(img.data, img.shape[1], img.shape[0], QImage.Format_Grayscale8)
+                pixmap = QPixmap.fromImage(qimage)
+                self.imageDisplayLabel.setPixmap(pixmap.scaled(self.imageDisplayLabel.size(), Qt.KeepAspectRatio))
+            grabResult.Release()
 
     def updateDirectoryDisplay(self, message):
         self.directoryDisplayLabel.setText(message)
