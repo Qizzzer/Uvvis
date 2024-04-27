@@ -13,6 +13,12 @@ class CameraControlApp(QWidget):
         super().__init__()
         self.camera = None
         self.initUI()
+        self.timer = QTimer(self)  # Timer for updating the display
+        self.timer.timeout.connect(self.updateImageDisplay())
+
+        self.converter = pylon.ImageFormatConverter()
+        self.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
 
     def initUI(self):
         mainLayout = QVBoxLayout(self)
@@ -82,30 +88,15 @@ class CameraControlApp(QWidget):
 
 
     def initCamera(self):
-        selectedCamera = self.cameraSelectionComboBox.currentText()
-        if selectedCamera == "Virtual Camera":
-            pass
-        else:
-            # Initialize the real camera based on the selected serial number
-            devices = pylon.TlFactory.GetInstance().EnumerateDevices()
-            for device in devices:
-                if device.GetSerialNumber() == selectedCamera:
-                    self.camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateDevice(device))
-                    break
+        self.camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
         self.camera.Open()
         exposureTime = int(self.exposureTimeInput.text())
-        if selectedCamera != "Virtual Camera":
-            self.camera.ExposureTimeAbs.SetValue(exposureTime)
-            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-            self.timer.start(100)  # Start updating the display every 100 ms
+        self.camera.ExposureTime.SetValue(exposureTime)
         print(f"Camera initialized with exposure time: {exposureTime}us")
         self.updateDirectoryDisplay(f"Camera initialized with exposure time: {exposureTime}us")
+        self.timer.start(30)  # Start updating the display every 30 ms
 
     def captureImage(self, imageType):
-        if not self.camera or not self.camera.IsOpen:
-            print("Camera is not initialized.")
-            self.updateDirectoryDisplay("Camera is not initialized.")
-            return
 
         # Determine save directory
         save_directory = imageType
@@ -113,33 +104,22 @@ class CameraControlApp(QWidget):
             os.makedirs(save_directory)
 
         # Capture and save the image
-        self.timer.stop()  # Stop the real-time updates
-        if self.camera.IsGrabbing():
-            grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            if grabResult.GrabSucceeded():
-                # Save the image
-                img = grabResult.Array
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"captured_{timestamp}.png"
-                cv2.imwrite(os.path.join("save_directory", filename), img)  # Specify your save directory
-                self.directoryDisplayLabel.setText(f"Image saved in: {os.path.abspath('save_directory')}/{filename}")
-                # Update the display with the last captured image
-                qimage = QImage(img.data, img.shape[1], img.shape[0], QImage.Format_Indexed8)
-                pixmap = QPixmap.fromImage(qimage)
-                self.imageDisplayLabel.setPixmap(pixmap.scaled(self.imageDisplayLabel.size(), Qt.KeepAspectRatio))
-            grabResult.Release()
+        self.timer.stop()  # Stop the real-time display updates
+        # Save the current image displayed in self.imageDisplayLabel
+        pixmap = self.imageDisplayLabel.pixmap()
+        pixmap.save(os.path.join(imageType, "captured_image.png"))
+        print("Image captured and timer stopped.")
 
+    def updateImageDisplay(self):
+        grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+        if grabResult.GrabSucceeded():
+            image = self.converter.Convert(grabResult)
+            img = image.GetArray()
+            q_img = QImage(img.data, img.shape[1], img.shape[0], QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_img)
+            self.imageDisplayLabel.setPixmap(pixmap)
+        grabResult.Release()
 
-    def updateImageDisplay(self, imagePath):
-        if self.camera.IsGrabbing():
-            grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            if grabResult.GrabSucceeded():
-                # Access the image data and convert it to a format suitable for display
-                img = grabResult.Array
-                qimage = QImage(img.data, img.shape[1], img.shape[0], QImage.Format_Grayscale8)
-                pixmap = QPixmap.fromImage(qimage)
-                self.imageDisplayLabel.setPixmap(pixmap.scaled(self.imageDisplayLabel.size(), Qt.KeepAspectRatio))
-            grabResult.Release()
 
     def updateDirectoryDisplay(self, message):
         self.directoryDisplayLabel.setText(message)
