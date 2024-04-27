@@ -1,0 +1,148 @@
+import os
+import time
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QLineEdit, QHBoxLayout,QComboBox, QGroupBox, QGridLayout, QScrollArea
+from PyQt5.QtGui import QPixmap, QImage ,QCursor
+from PyQt5.QtCore import Qt, QTimer
+from pypylon import pylon
+import cv2
+import sys
+
+class CameraControlApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.camera = None
+        self.initUI()
+
+    def initUI(self):
+        mainLayout = QVBoxLayout(self)
+
+        # Camera Selection and Settings Group
+        cameraSettingsGroup = QGroupBox("Camera Settings")
+        cameraSettingsLayout = QGridLayout()
+
+        # Camera Selection
+        cameraSettingsLayout.addWidget(QLabel("Select Camera:"), 0, 0)
+        self.cameraSelectionComboBox = QComboBox()
+        self.cameraSelectionComboBox.addItems(self.listCameras())  # Assuming listCameras() is defined elsewhere
+        cameraSettingsLayout.addWidget(self.cameraSelectionComboBox, 0, 1)
+
+        # Exposure Time Input
+        cameraSettingsLayout.addWidget(QLabel("Exposure Time (us):"), 1, 0)
+        self.exposureTimeInput = QLineEdit("3000")  # Default exposure time in microseconds
+        cameraSettingsLayout.addWidget(self.exposureTimeInput, 1, 1)
+
+        cameraSettingsGroup.setLayout(cameraSettingsLayout)
+
+        # Camera Controls Group
+        cameraControlGroup = QGroupBox("Camera Controls")
+        cameraControlLayout = QVBoxLayout()
+
+        self.initCameraBtn = QPushButton("Init Camera")
+        self.capturePictureBtn = QPushButton("Capture Picture")
+        self.closeCameraBtn = QPushButton("Close Camera")
+
+        cameraControlLayout.addWidget(self.initCameraBtn)
+        cameraControlLayout.addWidget(self.capturePictureBtn)
+        cameraControlLayout.addWidget(self.closeCameraBtn)
+        cameraControlGroup.setLayout(cameraControlLayout)
+
+        # Directory Display
+        self.directoryDisplayLabel = QLabel("Save Directories will be displayed here")
+
+        # Image Display Area with Scroll
+        self.imageDisplayLabel = QLabel(self)
+        self.imageDisplayLabel.setScaledContents(True)
+        scrollArea = QScrollArea()
+        scrollArea.setWidgetResizable(True)
+        scrollArea.setWidget(self.imageDisplayLabel)
+
+        # Layout Organization
+        topLayout = QHBoxLayout()
+        topLayout.addWidget(cameraSettingsGroup)
+        topLayout.addWidget(cameraControlGroup)
+        mainLayout.addLayout(topLayout)
+        mainLayout.addWidget(self.directoryDisplayLabel)
+        mainLayout.addWidget(scrollArea)
+
+        self.setWindowTitle("Camera Control")
+
+        # connect
+        self.initCameraBtn.clicked.connect(self.initCamera)
+        self.capturePictureBtn.clicked.connect(lambda: self.captureImage("sample_picture"))
+        self.closeCameraBtn.clicked.connect(self.closeCamera)
+
+
+
+    def listCameras(self):
+        devices = pylon.TlFactory.GetInstance().EnumerateDevices()
+        if not devices:
+            return ["Virtual Camera"]  # No real cameras found, return virtual camera option
+        return [device.GetSerialNumber() for device in devices] + ["Virtual Camera"]
+
+
+    def initCamera(self):
+        selectedCamera = self.cameraSelectionComboBox.currentText()
+        if selectedCamera == "Virtual Camera":
+            pass
+        else:
+            # Initialize the real camera based on the selected serial number
+            devices = pylon.TlFactory.GetInstance().EnumerateDevices()
+            for device in devices:
+                if device.GetSerialNumber() == selectedCamera:
+                    self.camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateDevice(device))
+                    break
+        self.camera.Open()
+        exposureTime = int(self.exposureTimeInput.text())
+        if selectedCamera != "Virtual Camera":
+            self.camera.ExposureTimeAbs.SetValue(exposureTime)
+        print(f"Camera initialized with exposure time: {exposureTime}us")
+        self.updateDirectoryDisplay(f"Camera initialized with exposure time: {exposureTime}us")
+
+    def captureImage(self, imageType):
+        if not self.camera or not self.camera.IsOpen:
+            print("Camera is not initialized.")
+            self.updateDirectoryDisplay("Camera is not initialized.")
+            return
+
+        # Determine save directory
+        save_directory = imageType
+        if not os.path.exists(save_directory):
+            os.makedirs(save_directory)
+
+        # Capture and save the image
+        self.camera.StartGrabbingMax(1)
+        grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+        if grabResult.GrabSucceeded():
+            img = grabResult.Array
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"{imageType}_{timestamp}.png"
+            cv2.imwrite(os.path.join(save_directory, filename), img)
+            imagePath = os.path.join(save_directory, filename)
+            self.updateImageDisplay(imagePath)
+            self.directoryDisplayLabel.setText(f"Last saved in: {os.path.abspath(save_directory)}")
+            print(f"Image saved in {imagePath}")
+            self.updateDirectoryDisplay(f"Image saved in {imagePath}，image maxpixe is {img.max()}")
+        grabResult.Release()
+
+    def updateImageDisplay(self, imagePath):
+        pixmap = QPixmap(imagePath)
+        self.imageDisplayLabel.setPixmap(
+            pixmap.scaled(self.imageDisplayLabel.width(), self.imageDisplayLabel.height(), Qt.KeepAspectRatio))
+
+
+    def updateDirectoryDisplay(self, message):
+        self.directoryDisplayLabel.setText(message)
+
+
+    def closeCamera(self):
+        if self.camera and self.camera.IsOpen:
+            self.camera.Close()
+            print("Camera closed")
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    ex = CameraControlApp()
+    ex.show()
+    sys.exit(app.exec_())
